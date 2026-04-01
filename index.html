@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CW Cycle Count</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#F7F8FA;color:#1A1A2E}
+  input,select,button{font-family:inherit}
+  input:focus{outline:none;box-shadow:0 0 0 2px #4A90D944}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:#F0F1F3}
+  ::-webkit-scrollbar-thumb{background:#D0D5DD;border-radius:3px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef } = React;
+
+// ── DATA ─────────────────────────────────────────────────────────────────────
+const SITES = [
+  { id:"AMS01", name:"AMS01", city:"Amsterdam",  country:"NL", lastCount:"2 days ago", status:"up-to-date" },
+  { id:"LHR02", name:"LHR02", city:"London",     country:"GB", lastCount:"8 days ago", status:"due"        },
+  { id:"FRA03", name:"FRA03", city:"Frankfurt",  country:"DE", lastCount:"1 day ago",  status:"up-to-date" },
+];
+
+const SKU_MASTER = [
+  { cwpn:"010010001", nsItemId:"1062833700", nsDesc:"",            desc:"GB200 NVL72 rack unit",              category:"01", typeName:"Compute — GB200",    serialTracked:true,  qty_daily:0,  qty_excess:2,  qty_critical:4, qty_rma:1, qty_quarantine:0, status:"active",  flagged:false },
+  { cwpn:"010020001", nsItemId:"1062833701", nsDesc:"",            desc:"GB300 NVL72 rack unit",              category:"01", typeName:"Compute — GB300",    serialTracked:true,  qty_daily:0,  qty_excess:1,  qty_critical:3, qty_rma:0, qty_quarantine:1, status:"active",  flagged:false },
+  { cwpn:"030010001", nsItemId:"1834560280", nsDesc:"",            desc:"100G QSFP28 SR4 optical module",     category:"03", typeName:"Optics — 100G SR4",  serialTracked:false, qty_daily:8,  qty_excess:24, qty_critical:6, qty_rma:0, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"030020001", nsItemId:"1834560282", nsDesc:"",            desc:"400G QSFP-DD DR4 optical module",    category:"03", typeName:"Optics — 400G DR4",  serialTracked:false, qty_daily:2,  qty_excess:4,  qty_critical:6, qty_rma:0, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"030030001", nsItemId:"1834560290", nsDesc:"",            desc:"10G SFP+ LR single-mode 10km",      category:"03", typeName:"Optics — 10G LR",    serialTracked:false, qty_daily:18, qty_excess:6,  qty_critical:4, qty_rma:0, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"040010001", nsItemId:"1834560292", nsDesc:"",            desc:"10G SFP+ DAC cable 3m",              category:"04", typeName:"Cable — DAC 10G 3m", serialTracked:false, qty_daily:40, qty_excess:20, qty_critical:0, qty_rma:0, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"040020001", nsItemId:"1834560293", nsDesc:"",            desc:"AOC 8x LC 100G 10m",                category:"04", typeName:"Cable — AOC 100G",   serialTracked:false, qty_daily:4,  qty_excess:12, qty_critical:0, qty_rma:2, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"050010001", nsItemId:"1834560298", nsDesc:"",            desc:"NVMe SSD 3.84TB U.2 enterprise",    category:"05", typeName:"Storage — NVMe U.2", serialTracked:false, qty_daily:22, qty_excess:10, qty_critical:5, qty_rma:1, qty_quarantine:0, status:"active",  flagged:true  },
+  { cwpn:"060010001", nsItemId:"1062833750", nsDesc:"PSU 2KW",     desc:"PSU 2000W redundant hotswap",       category:"06", typeName:"Power — PSU 2kW",    serialTracked:false, qty_daily:14, qty_excess:8,  qty_critical:4, qty_rma:3, qty_quarantine:0, status:"active",  flagged:false },
+];
+
+const SERIALS = {
+  "010010001":["SNCWGB200412","SNCWGB200413","SNCWGB200414","SNCWGB200415","SNCWGB200416","SNCWGB200417"],
+  "010020001":["SNCWGB300091","SNCWGB300092","SNCWGB300093","SNCWGB300094"],
+};
+
+const CAT_LABELS = {"01":"Compute","02":"Net — Switch","03":"Net — Optics","04":"Net — Cables","05":"Storage","06":"Power","07":"Accessories"};
+const CAT_COLORS = {"01":"#7B68C8","02":"#4A90D9","03":"#3AAA7A","04":"#4A90D9","05":"#D4874A","06":"#E05A5A","07":"#888"};
+const CAT_BGS    = {"01":"#F0EEFB","02":"#EBF4FC","03":"#EDF7F2","04":"#EBF4FC","05":"#FDF5EE","06":"#FDF0F0","07":"#F5F5F5"};
+
+const COUNT_TYPES = {
+  daily:  { label:"Daily count",  desc:"Daily storage area only",                sections:["daily"],                              color:"#4A90D9" },
+  weekly: { label:"Weekly count", desc:"Daily + Excess + Critical spares",       sections:["daily","excess","critical"],           color:"#7B68C8" },
+  full:   { label:"Full count",   desc:"All sections including RMA & Quarantine",sections:["daily","excess","critical","rma","quarantine"], color:"#3AAA7A" },
+};
+
+const SECTIONS = {
+  daily:      { label:"Daily storage",   color:"#4A90D9", bg:"#EBF4FC", field:"qty_daily"      },
+  excess:     { label:"Excess / sealed", color:"#7B68C8", bg:"#F0EEFB", field:"qty_excess"     },
+  critical:   { label:"Critical spares", color:"#E05A5A", bg:"#FDF0F0", field:"qty_critical"   },
+  rma:        { label:"RMA / defective", color:"#D4874A", bg:"#FDF5EE", field:"qty_rma"        },
+  quarantine: { label:"Quarantine",      color:"#888",    bg:"#F5F5F5", field:"qty_quarantine" },
+};
+
+// ── STYLES ────────────────────────────────────────────────────────────────────
+const S = {
+  nav:        { background:"#fff", borderBottom:"1px solid #EAECF0", padding:"0 28px", display:"flex", alignItems:"center", justifyContent:"space-between", height:54, position:"sticky", top:0, zIndex:50 },
+  page:       { maxWidth:1140, margin:"0 auto", padding:"26px 22px" },
+  h1:         { fontSize:22, fontWeight:600, color:"#1A1A2E", marginBottom:4 },
+  h2:         { fontSize:15, fontWeight:600, color:"#1A1A2E" },
+  sub:        { fontSize:13, color:"#8A8FA8" },
+  card:       { background:"#fff", border:"1px solid #EAECF0", borderRadius:12, padding:"18px 20px" },
+  btn:        { padding:"7px 15px", fontSize:13, fontWeight:500, border:"1px solid #D0D5DD", borderRadius:8, background:"#fff", color:"#344054", cursor:"pointer" },
+  btnPrimary: { padding:"7px 15px", fontSize:13, fontWeight:500, border:"none", borderRadius:8, background:"#1A1A2E", color:"#fff", cursor:"pointer" },
+  btnSm:      { padding:"4px 10px", fontSize:11, fontWeight:500, border:"1px solid #D0D5DD", borderRadius:6, background:"#fff", color:"#344054", cursor:"pointer" },
+  input:      { fontSize:13, padding:"7px 11px", border:"1px solid #D0D5DD", borderRadius:8, background:"#fff", color:"#1A1A2E", outline:"none", width:"100%" },
+  qtyInput:   { fontSize:13, padding:"4px 6px", border:"1px solid #D0D5DD", borderRadius:6, background:"#fff", color:"#1A1A2E", outline:"none", width:52, textAlign:"center" },
+  badge:      (bg,c)=>({ display:"inline-block", fontSize:11, fontWeight:500, padding:"2px 8px", borderRadius:20, background:bg, color:c }),
+  tag:        (bg,c)=>({ display:"inline-flex", alignItems:"center", fontSize:10, fontWeight:600, padding:"2px 7px", borderRadius:20, background:bg, color:c, textTransform:"uppercase", letterSpacing:"0.03em" }),
+  row:        { display:"flex", alignItems:"center", gap:10 },
+  spacer:     { flex:1 },
+  grid4:      { display:"grid", gridTemplateColumns:"repeat(4,minmax(0,1fr))", gap:10 },
+  thStyle:    { textAlign:"left", padding:"8px 10px", fontSize:10, color:"#8A8FA8", fontWeight:500, whiteSpace:"nowrap", borderBottom:"1px solid #EAECF0", textTransform:"uppercase", letterSpacing:"0.04em", background:"#FAFBFC" },
+  tdStyle:    { padding:"8px 10px", borderBottom:"1px solid #F0F1F3", fontSize:12, verticalAlign:"middle" },
+};
+
+// ── SHARED COMPONENTS ─────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, accent }) {
+  return (
+    <div style={{ background:"#fff", border:"1px solid #EAECF0", borderRadius:10, padding:"14px 16px" }}>
+      <div style={{ fontSize:11, color:"#8A8FA8", fontWeight:500, textTransform:"uppercase", letterSpacing:"0.04em", marginBottom:4 }}>{label}</div>
+      <div style={{ fontSize:24, fontWeight:600, color:accent||"#1A1A2E", lineHeight:1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize:12, color:"#8A8FA8", marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function NavBar({ view, setView }) {
+  return (
+    <div style={S.nav}>
+      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        <div style={{ width:28, height:28, background:"#1A1A2E", borderRadius:6, display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="1" width="5" height="5" rx="1" fill="white"/>
+            <rect x="8" y="1" width="5" height="5" rx="1" fill="white" fillOpacity=".6"/>
+            <rect x="1" y="8" width="5" height="5" rx="1" fill="white" fillOpacity=".6"/>
+            <rect x="8" y="8" width="5" height="5" rx="1" fill="white" fillOpacity=".3"/>
+          </svg>
+        </div>
+        <span style={{ fontSize:15, fontWeight:600 }}>CW Cycle Count</span>
+        <span style={{ fontSize:11, color:"#8A8FA8" }}>EU Operations</span>
+      </div>
+      <div style={{ display:"flex", gap:4 }}>
+        {[["home","Overview"],["sku","SKU / CWPN Master"],["history","History"]].map(([v,l]) => (
+          <button key={v} onClick={() => setView(v)} style={{ ...S.btn, background:view===v?"#F0F1F5":"#fff", border:"none", color:view===v?"#1A1A2E":"#8A8FA8", fontWeight:view===v?600:400 }}>{l}</button>
+        ))}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ width:30, height:30, borderRadius:"50%", background:"#E8EAF0", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:600, color:"#555" }}>ICS</div>
+        <span style={{ fontSize:12, color:"#8A8FA8" }}>J. Bakker · AMS01</span>
+      </div>
+    </div>
+  );
+}
+
+// ── HOME ──────────────────────────────────────────────────────────────────────
+function HomeView({ onStartSession }) {
+  const [showModal, setShowModal] = useState(false);
+  const [countType, setCountType] = useState("daily");
+  const flagged = SKU_MASTER.filter(s => s.flagged).length;
+
+  return (
+    <div style={S.page}>
+      <div style={{ marginBottom:22 }}>
+        <div style={S.h1}>Inventory overview</div>
+        <div style={S.sub}>European data centre operations</div>
+      </div>
+      <div style={{ ...S.grid4, marginBottom:20 }}>
+        <StatCard label="Total SKUs" value={SKU_MASTER.length} sub="across 3 sites" />
+        <StatCard label="Pending counts" value="2" sub="1 overdue" accent="#D4874A" />
+        <StatCard label="Open variances" value="3" sub="awaiting review" accent="#E05A5A" />
+        <StatCard label="NS desc. missing" value={flagged} sub="flagged for enrichment" accent="#7B68C8" />
+      </div>
+
+      {flagged > 0 && (
+        <div style={{ background:"#FDF5EE", border:"1px solid #F0C090", borderRadius:10, padding:"12px 16px", marginBottom:18, display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ width:8, height:8, borderRadius:"50%", background:"#D4874A", flexShrink:0 }} />
+          <div style={{ fontSize:13, color:"#7A4010" }}>
+            <strong>{flagged} items</strong> imported from NetSuite with no description. Assigned CWPNs and flagged — go to <strong>SKU / CWPN Master</strong> to review and enrich.
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...S.row, marginBottom:12 }}>
+        <div style={S.h2}>Sites</div>
+        <div style={S.spacer} />
+        <button style={S.btn}>Import NetSuite CSV</button>
+        <button style={S.btnPrimary} onClick={() => setShowModal(true)}>+ Start count session</button>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12, marginBottom:22 }}>
+        {SITES.map(s => {
+          const sc = s.status==="up-to-date" ? ["#EDF7F2","#2D7A56","Up to date"] : ["#FDF5EE","#9C4221","Count due"];
+          return (
+            <div key={s.id} style={{ ...S.card, borderRadius:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:600 }}>{s.name}</div>
+                  <div style={{ fontSize:12, color:"#8A8FA8" }}>{s.city}, {s.country}</div>
+                </div>
+                <span style={S.badge(sc[0],sc[1])}>{sc[2]}</span>
+              </div>
+              <div style={{ fontSize:12, color:"#8A8FA8" }}>Last count: {s.lastCount}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ ...S.row, marginBottom:12 }}><div style={S.h2}>Recent sessions</div></div>
+      <div style={{ ...S.card, padding:0, overflow:"hidden" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+          <thead>
+            <tr>{["Session","Site","Type","Technician","Started","Status"].map(h=><th key={h} style={S.thStyle}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {[["CC-2024-041","AMS01","Weekly","J. Bakker","Today 07:15","In progress"],
+              ["CC-2024-040","LHR02","Daily","M. Chen","Yesterday","Pending review"],
+              ["CC-2024-039","FRA03","Full","A. Müller","3 days ago","Approved"]].map(([id,site,type,tech,when,status])=>{
+              const sc = status==="Approved"?["#EDF7F2","#2D7A56"]:status==="In progress"?["#EBF4FC","#2B6CB0"]:["#FDF5EE","#9C4221"];
+              return (
+                <tr key={id}>
+                  <td style={{ ...S.tdStyle, fontWeight:500 }}>{id}</td>
+                  <td style={S.tdStyle}>{site}</td>
+                  <td style={S.tdStyle}>{type}</td>
+                  <td style={{ ...S.tdStyle, color:"#8A8FA8" }}>{tech}</td>
+                  <td style={{ ...S.tdStyle, color:"#8A8FA8" }}>{when}</td>
+                  <td style={S.tdStyle}><span style={S.badge(sc[0],sc[1])}>{status}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.35)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100 }}>
+          <div style={{ background:"#fff", borderRadius:14, padding:28, width:420, boxShadow:"0 8px 32px rgba(0,0,0,0.12)" }}>
+            <div style={{ fontSize:17, fontWeight:600, marginBottom:6 }}>Start count session</div>
+            <div style={{ fontSize:13, color:"#8A8FA8", marginBottom:20 }}>Select site and count type</div>
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:12, fontWeight:500, color:"#555", marginBottom:6 }}>Site</div>
+              <select style={S.input}>{SITES.map(s=><option key={s.id}>{s.name} — {s.city}</option>)}</select>
+            </div>
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:12, fontWeight:500, color:"#555", marginBottom:8 }}>Count type</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {Object.entries(COUNT_TYPES).map(([k,v])=>(
+                  <div key={k} onClick={()=>setCountType(k)} style={{ display:"flex", alignItems:"center", gap:12, padding:"11px 14px", borderRadius:8, border:`1.5px solid ${countType===k?v.color:"#EAECF0"}`, cursor:"pointer", background:countType===k?`${v.color}18`:"#fff" }}>
+                    <div style={{ width:14, height:14, borderRadius:"50%", border:`2px solid ${v.color}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                      {countType===k && <div style={{ width:7, height:7, borderRadius:"50%", background:v.color }} />}
+                    </div>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:600 }}>{v.label}</div>
+                      <div style={{ fontSize:12, color:"#8A8FA8" }}>{v.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+              <button style={S.btn} onClick={()=>setShowModal(false)}>Cancel</button>
+              <button style={S.btnPrimary} onClick={()=>{ setShowModal(false); onStartSession(countType); }}>Begin session →</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SKU MASTER ────────────────────────────────────────────────────────────────
+function SKUView() {
+  const [search, setSearch] = useState("");
+  const [filterFlagged, setFilterFlagged] = useState(false);
+  const [editCwpn, setEditCwpn] = useState(null);
+  const filtered = SKU_MASTER.filter(s => {
+    const q = search.toLowerCase();
+    return (s.cwpn.includes(q)||s.desc.toLowerCase().includes(q)||s.nsItemId.includes(q)||s.typeName.toLowerCase().includes(q)) && (!filterFlagged||s.flagged);
+  });
+  return (
+    <div style={S.page}>
+      <div style={{ ...S.row, marginBottom:20 }}>
+        <div><div style={S.h1}>SKU / CWPN master</div><div style={S.sub}>CoreWeave Part Number registry — primary source of truth</div></div>
+        <div style={S.spacer} />
+        <button style={S.btn}>Import NetSuite CSV</button>
+        <button style={S.btnPrimary}>+ Add SKU</button>
+      </div>
+      <div style={{ ...S.card, padding:"14px 18px", marginBottom:16, background:"#FAFBFC" }}>
+        <div style={{ fontSize:12, fontWeight:600, color:"#555", marginBottom:8 }}>CWPN format — 9 digits fixed: CC TTT SSSS</div>
+        <div style={{ display:"flex", gap:20, flexWrap:"wrap" }}>
+          {Object.entries(CAT_LABELS).map(([k,v])=>(
+            <div key={k} style={{ display:"flex", alignItems:"center", gap:6 }}>
+              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:700, color:CAT_COLORS[k], background:CAT_BGS[k], padding:"2px 7px", borderRadius:6 }}>{k}</span>
+              <span style={{ fontSize:12, color:"#555" }}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ ...S.card, padding:0, overflow:"hidden" }}>
+        <div style={{ padding:"12px 16px", borderBottom:"1px solid #EAECF0", display:"flex", alignItems:"center", gap:10 }}>
+          <input style={{ ...S.input, maxWidth:300 }} placeholder="Search CWPN, description, NetSuite ID…" value={search} onChange={e=>setSearch(e.target.value)} />
+          <button onClick={()=>setFilterFlagged(!filterFlagged)} style={{ ...S.btn, borderColor:filterFlagged?"#D4874A":"#D0D5DD", background:filterFlagged?"#FDF5EE":"#fff", color:filterFlagged?"#9C4221":"#344054" }}>
+            {filterFlagged?"Showing: flagged only":"Show flagged only"}
+          </button>
+          <div style={S.spacer} />
+          <span style={{ fontSize:12, color:"#8A8FA8" }}>{filtered.length} items</span>
+        </div>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+            <thead>
+              <tr>{["CWPN","Category","Type","Description","Serial","NS Item ID","NS Description","Daily","Excess","Critical","RMA","Quar.","Total","Status",""].map(h=>(
+                <th key={h} style={{ ...S.thStyle, textAlign:["Daily","Excess","Critical","RMA","Quar.","Total","Serial"].includes(h)?"center":"left" }}>{h}</th>
+              ))}</tr>
+            </thead>
+            <tbody>
+              {filtered.map((item,i)=>{
+                const total=item.qty_daily+item.qty_excess+item.qty_critical+item.qty_rma+item.qty_quarantine;
+                const rowBg=item.flagged?"#FFFBF5":i%2===0?"#fff":"#FAFBFC";
+                return (
+                  <tr key={item.cwpn} style={{ background:rowBg }}>
+                    <td style={{ ...S.tdStyle, fontFamily:"monospace", fontWeight:700, color:CAT_COLORS[item.category], fontSize:13 }}>{item.cwpn}</td>
+                    <td style={S.tdStyle}><span style={S.tag(CAT_BGS[item.category],CAT_COLORS[item.category])}>{CAT_LABELS[item.category]}</span></td>
+                    <td style={{ ...S.tdStyle, whiteSpace:"nowrap", color:"#555" }}>{item.typeName}</td>
+                    <td style={{ ...S.tdStyle, fontWeight:500, maxWidth:170, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.desc}</td>
+                    <td style={{ ...S.tdStyle, textAlign:"center" }}>{item.serialTracked?"✓":"—"}</td>
+                    <td style={{ ...S.tdStyle, fontFamily:"monospace", color:"#8A8FA8", fontSize:11 }}>{item.nsItemId}</td>
+                    <td style={S.tdStyle}>{item.nsDesc?<span style={{ color:"#555" }}>{item.nsDesc}</span>:<span style={S.badge("#FDF5EE","#9C4221")}>missing — enriched via CWPN</span>}</td>
+                    {["qty_daily","qty_excess","qty_critical","qty_rma","qty_quarantine"].map(f=>(
+                      <td key={f} style={{ ...S.tdStyle, textAlign:"center", color:item[f]===0?"#CCC":"#1A1A2E", fontWeight:item[f]>0?500:400 }}>{item[f]||"—"}</td>
+                    ))}
+                    <td style={{ ...S.tdStyle, textAlign:"center", fontWeight:700 }}>{total}</td>
+                    <td style={S.tdStyle}><span style={S.badge(item.status==="active"?"#EDF7F2":"#FDF5EE",item.status==="active"?"#2D7A56":"#9C4221")}>{item.status}</span></td>
+                    <td style={S.tdStyle}><button style={S.btnSm} onClick={()=>setEditCwpn(editCwpn===item.cwpn?null:item.cwpn)}>Edit</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {editCwpn && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.3)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:100 }}>
+          <div style={{ background:"#fff", borderRadius:12, padding:24, width:440, boxShadow:"0 8px 32px rgba(0,0,0,0.12)" }}>
+            <div style={{ fontSize:15, fontWeight:600, marginBottom:4 }}>Edit SKU record</div>
+            <div style={{ fontSize:12, color:"#8A8FA8", marginBottom:18, fontFamily:"monospace" }}>CWPN: {editCwpn}</div>
+            {[["Description","desc"],["NetSuite Item ID","nsItemId"],["NetSuite Description","nsDesc"]].map(([label,field])=>(
+              <div key={field} style={{ marginBottom:12 }}>
+                <div style={{ fontSize:12, fontWeight:500, color:"#555", marginBottom:4 }}>{label}</div>
+                <input style={S.input} defaultValue={SKU_MASTER.find(s=>s.cwpn===editCwpn)?.[field]||""} placeholder={field==="nsDesc"?"Enter description from NetSuite…":""} />
+              </div>
+            ))}
+            <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:16 }}>
+              <button style={S.btn} onClick={()=>setEditCwpn(null)}>Cancel</button>
+              <button style={S.btnPrimary} onClick={()=>setEditCwpn(null)}>Save changes</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── COUNT SESSION ─────────────────────────────────────────────────────────────
+function CountSession({ countType, onBack }) {
+  const ct = COUNT_TYPES[countType];
+  const [activeSection, setActiveSection] = useState(ct.sections[0]);
+  const [scanVal, setScanVal] = useState("");
+  const [scanMsg, setScanMsg] = useState(null);
+  const [counts, setCounts] = useState(()=>{ const init={}; SKU_MASTER.forEach(i=>{ init[i.cwpn]={ onHand:"" }; }); return init; });
+  const [scannedSerials, setScannedSerials] = useState([]);
+
+  const secDef = SECTIONS[activeSection];
+  const sectionItems = SKU_MASTER.filter(i=>i[secDef.field]>0);
+  const getVariance = item => { const oh=counts[item.cwpn].onHand; if(oh===""||oh===undefined) return null; return parseInt(oh)-item[secDef.field]; };
+  const confirmed = sectionItems.filter(i=>getVariance(i)===0).length;
+  const variances = sectionItems.filter(i=>{ const v=getVariance(i); return v!==null&&v!==0; }).length;
+  const pending   = sectionItems.filter(i=>counts[i.cwpn].onHand==="").length;
+
+  const handleScan = e => {
+    if(e.key!=="Enter") return;
+    const val=scanVal.trim(); if(!val) return;
+    const allSerials=Object.values(SERIALS).flat();
+    if(allSerials.includes(val)){
+      const entry=Object.entries(SERIALS).find(([,v])=>v.includes(val));
+      setScannedSerials(prev=>[...prev.filter(s=>s!==val),val]);
+      setScanMsg({ type:"ok", text:`Serial confirmed — ${val}${entry?` (CWPN ${entry[0]})`:""}` });
+    } else {
+      const match=SKU_MASTER.find(s=>s.cwpn===val||s.nsItemId===val);
+      setScanMsg(match?{ type:"sku", text:`CWPN matched — ${match.desc}` }:{ type:"warn", text:`Not in system — ${val}` });
+    }
+    setScanVal(""); setTimeout(()=>setScanMsg(null),4000);
+  };
+
+  return (
+    <div style={{ ...S.page, maxWidth:1200 }}>
+      <div style={{ ...S.row, marginBottom:18 }}>
+        <button style={S.btn} onClick={onBack}>← Back</button>
+        <div style={{ marginLeft:6 }}>
+          <div style={{ fontSize:16, fontWeight:600 }}>AMS01 — Count session</div>
+          <div style={{ fontSize:12, color:"#8A8FA8" }}><span style={S.badge(`${ct.color}18`,ct.color)}>{ct.label}</span><span style={{ marginLeft:8 }}>Started today · J. Bakker</span></div>
+        </div>
+        <div style={S.spacer} />
+        <button style={S.btn}>Save draft</button>
+        <button style={S.btnPrimary}>Submit for review</button>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"180px 1fr", gap:14 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          <div style={{ fontSize:11, fontWeight:500, color:"#8A8FA8", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:4 }}>Sections</div>
+          {ct.sections.map(sec=>{
+            const sd=SECTIONS[sec];
+            const items=SKU_MASTER.filter(i=>i[sd.field]>0);
+            const done=items.filter(i=>counts[i.cwpn].onHand!=="").length;
+            const isActive=activeSection===sec;
+            return (
+              <div key={sec} onClick={()=>setActiveSection(sec)} style={{ padding:"10px 12px", borderRadius:8, border:`1.5px solid ${isActive?sd.color:"#EAECF0"}`, background:isActive?`${sd.color}12`:"#fff", cursor:"pointer" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}>
+                  <div style={{ width:8, height:8, borderRadius:"50%", background:done===items.length&&items.length>0?"#3AAA7A":sd.color }} />
+                  <div style={{ fontSize:12, fontWeight:isActive?600:400, color:isActive?"#1A1A2E":"#555" }}>{sd.label}</div>
+                </div>
+                <div style={{ fontSize:11, color:"#8A8FA8" }}>{done}/{items.length} counted</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={S.grid4}>
+            <StatCard label="In section" value={sectionItems.length} />
+            <StatCard label="Confirmed" value={confirmed} accent="#3AAA7A" />
+            <StatCard label="Variances" value={variances} accent="#E05A5A" />
+            <StatCard label="Pending" value={pending} accent="#8A8FA8" />
+          </div>
+          <div style={{ background:"#fff", border:"1px solid #EAECF0", borderLeft:`3px solid ${secDef.color}`, borderRadius:8, padding:"10px 14px", display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:12, color:"#8A8FA8", fontWeight:500, whiteSpace:"nowrap" }}>Scan / enter</span>
+            <input style={{ ...S.input, flex:1 }} placeholder="Scan serial, CWPN, or NetSuite ID — press Enter…" value={scanVal} onChange={e=>setScanVal(e.target.value)} onKeyDown={handleScan} autoFocus />
+            {scanMsg && <span style={{ ...S.badge(scanMsg.type==="ok"?"#EDF7F2":scanMsg.type==="sku"?"#EBF4FC":"#FDF0F0",scanMsg.type==="ok"?"#2D7A56":scanMsg.type==="sku"?"#2B6CB0":"#B03A3A"), whiteSpace:"nowrap", fontSize:11 }}>{scanMsg.text}</span>}
+          </div>
+          <div style={{ ...S.card, padding:0, overflow:"hidden" }}>
+            <div style={{ padding:"10px 14px", background:secDef.bg, borderBottom:`1px solid ${secDef.color}30`, display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ width:10, height:10, borderRadius:"50%", background:secDef.color }} />
+              <div style={{ fontSize:13, fontWeight:600 }}>{secDef.label}</div>
+              <div style={{ fontSize:12, color:"#8A8FA8" }}>{sectionItems.length} items</div>
+            </div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                <thead>
+                  <tr>{["CWPN","Description","Category","Tracked","Expected","On hand","Variance","Daily","Excess","Critical","RMA","Quar.","Total","Action"].map(h=>(
+                    <th key={h} style={{ ...S.thStyle, textAlign:["Expected","On hand","Variance","Daily","Excess","Critical","RMA","Quar.","Total","Tracked"].includes(h)?"center":"left" }}>{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {sectionItems.map((item,idx)=>{
+                    const exp=item[secDef.field];
+                    const oh=counts[item.cwpn].onHand;
+                    const variance=getVariance(item);
+                    const total=item.qty_daily+item.qty_excess+item.qty_critical+item.qty_rma+item.qty_quarantine;
+                    const isSerial=item.serialTracked;
+                    const scannedCount=isSerial?scannedSerials.filter(s=>SERIALS[item.cwpn]?.includes(s)).length:null;
+                    const rowBg=variance===null?(idx%2===0?"#fff":"#FAFBFC"):variance===0?"#F6FCF9":"#FEF8F8";
+                    return (
+                      <tr key={item.cwpn} style={{ background:rowBg }}>
+                        <td style={{ ...S.tdStyle, fontFamily:"monospace", fontWeight:700, color:CAT_COLORS[item.category], fontSize:11 }}>{item.cwpn}</td>
+                        <td style={{ ...S.tdStyle, fontWeight:500, maxWidth:160, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{item.desc}</td>
+                        <td style={S.tdStyle}><span style={S.tag(CAT_BGS[item.category],CAT_COLORS[item.category])}>{CAT_LABELS[item.category]}</span></td>
+                        <td style={{ ...S.tdStyle, textAlign:"center" }}><span style={S.tag(isSerial?"#EBF4FC":"#F5F5F5",isSerial?"#2B6CB0":"#888")}>{isSerial?"serial":"qty"}</span></td>
+                        <td style={{ ...S.tdStyle, textAlign:"center", fontWeight:600 }}>{exp}</td>
+                        <td style={{ ...S.tdStyle, textAlign:"center" }}>
+                          {isSerial
+                            ? <span style={{ fontWeight:600, color:scannedCount===exp?"#2D7A56":"#E05A5A" }}>{scannedCount??0}</span>
+                            : <input style={{ ...S.qtyInput, borderColor:variance===null?"#D0D5DD":variance===0?"#88C9A8":"#E8A0A0", background:variance===null?"#fff":variance===0?"#F6FCF9":"#FEF8F8" }} type="number" min="0" value={oh} placeholder="—" onChange={e=>setCounts(prev=>({...prev,[item.cwpn]:{onHand:e.target.value}}))} />
+                          }
+                        </td>
+                        <td style={{ ...S.tdStyle, textAlign:"center" }}>
+                          {variance===null?<span style={{color:"#CCC"}}>—</span>:variance===0?<span style={S.badge("#EDF7F2","#2D7A56")}>✓ 0</span>:<span style={S.badge("#FDF0F0","#B03A3A")}>{variance>0?"+":""}{variance}</span>}
+                        </td>
+                        {["qty_daily","qty_excess","qty_critical","qty_rma","qty_quarantine"].map(f=>(
+                          <td key={f} style={{ ...S.tdStyle, textAlign:"center", color:item[f]===0?"#DDD":"#555" }}>{item[f]||"—"}</td>
+                        ))}
+                        <td style={{ ...S.tdStyle, textAlign:"center", fontWeight:700 }}>{total}</td>
+                        <td style={{ ...S.tdStyle, textAlign:"center" }}>
+                          {variance!==null&&variance!==0&&<button style={{ ...S.btnSm, background:"#F0EEFB", borderColor:"#C4BCE8", color:"#553C9A" }}>Quarantine</button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding:"10px 16px", borderTop:"1px solid #EAECF0", display:"flex", gap:16, alignItems:"center" }}>
+              <div style={{ fontSize:11, color:"#8A8FA8" }}>All section quantities visible — use to investigate discrepancies across locations</div>
+              <div style={S.spacer} />
+              {[["#EDF7F2","#2D7A56","Matched"],["#FDF0F0","#B03A3A","Variance"],["#FAFBFC","#8A8FA8","Pending"]].map(([bg,c,l])=>(
+                <div key={l} style={{ display:"flex", alignItems:"center", gap:5 }}>
+                  <div style={{ width:10, height:10, borderRadius:2, background:bg, border:`1px solid ${c}40` }} />
+                  <span style={{ fontSize:11, color:"#8A8FA8" }}>{l}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryView() {
+  return (
+    <div style={S.page}>
+      <div style={{ marginBottom:20 }}><div style={S.h1}>Session history</div><div style={S.sub}>Completed and approved count sessions — export ready</div></div>
+      <div style={{ ...S.card, padding:"40px 0", textAlign:"center", color:"#8A8FA8", fontSize:13 }}>Full history and NetSuite export functionality connects once the backend is confirmed.</div>
+    </div>
+  );
+}
+
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [view, setView] = useState("home");
+  const [activeSession, setActiveSession] = useState(null);
+  const handleStart = ct => { setActiveSession(ct); setView("session"); };
+  return (
+    <div style={{ fontFamily:"system-ui,-apple-system,sans-serif", minHeight:"100vh", background:"#F7F8FA", color:"#1A1A2E" }}>
+      <NavBar view={view} setView={v=>{ setView(v); setActiveSession(null); }} />
+      {view==="home"    && <HomeView onStartSession={handleStart} />}
+      {view==="sku"     && <SKUView />}
+      {view==="history" && <HistoryView />}
+      {view==="session" && activeSession && <CountSession countType={activeSession} onBack={()=>{ setView("home"); setActiveSession(null); }} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
